@@ -3,16 +3,16 @@ package blis
 import "core:c"
 import "base:runtime"
 
-when ODIN_OS == .Linux { foreign import blis "../lib/zen3/libblis.a" }
+when ODIN_OS == .Linux { foreign import blis "../blis/lib/zen3/libblis.a" }
 
 Symmetric :: struct($T: typeid) {
     data: []T,
     m: int,
 }
 
-make_symmetric :: proc($T: typeid, m: int, allocator := context.allocator, loc := #caller_location) -> (out: Symmetric(T), err: runtime.Allocator_Error) #optional_allocator_error {
-    // out.data = mem.make_aligned([]T, m*m, align_of(T), allocator, loc) or_return
-    out.data = make([]T, m*m, allocator, loc) or_return
+make_symmetric :: proc($T: typeid, m: int) -> (out: Symmetric(T), err: runtime.Allocator_Error) #optional_allocator_error {
+    data := make([]T, m*m) or_return
+    out.data = data
     out.m = m
     return
 }
@@ -54,6 +54,7 @@ diag :: enum c.int {
     BLIS_UNIT_DIAG    = 1 << 8,
 }
 
+@(default_calling_convention="c")
 foreign blis {
     @(link_prefix="bli_")
     init :: proc() ---
@@ -98,9 +99,20 @@ setv :: #force_inline proc "c" (x: $T/[]$E, alpha: E, n: int = -1, incx: int = 1
     return
 }
 
-setsym :: proc(m: Symmetric($E), alpha: E) {
+setsym :: proc(s: Symmetric(f64), alpha: f64) {
     alpha := alpha
-    bli_setm(conj.BLIS_NO_CONJUGATE, doff(0), diag.BLIS_NONUNIT_DIAG, uplo.BLIS_DENSE, dim(m.m), dim(m.m), &alpha, raw_data(m.data), inc(m.m), inc(1))
+    bli_dsetm(
+        conj.BLIS_NO_CONJUGATE,
+        doff(0),
+        diag.BLIS_NONUNIT_DIAG,
+        uplo.BLIS_DENSE,
+        dim(s.m),
+        dim(s.m),
+        &alpha,
+        raw_data(s.data),
+        inc(s.m),
+        inc(1),
+    )
     return
 }
 
