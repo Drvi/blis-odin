@@ -10,8 +10,15 @@ Symmetric :: struct($T: typeid) {
     m: int,
 }
 
+Matrix :: struct($T: typeid) {
+    data: []T,
+    m: int,
+    n: int,
+}
+
 make_symmetric :: proc($T: typeid, m: int) -> (out: Symmetric(T), err: runtime.Allocator_Error) #optional_allocator_error {
     data := make([]T, m*m) or_return
+    for i in 0..<m { data[i+i*m] = T(1.0) }
     out.data = data
     out.m = m
     return
@@ -21,7 +28,7 @@ delete_symmetric :: proc(m: Symmetric($T)) {
     delete(m.data)
 }
 
-gint :: distinct c.int
+gint :: distinct int // int32_t or int64_t
 dim :: distinct gint
 inc :: distinct gint
 doff :: distinct gint
@@ -72,14 +79,27 @@ foreign blis {
     bli_sdotv :: proc(conjx: conj, conjy: conj, n: dim, x: [^]f32, incx: inc, y: [^]f32, incy: inc, rho: ^f32) ---
     bli_ddotv :: proc(conjx: conj, conjy: conj, n: dim, x: [^]f64, incx: inc, y: [^]f64, incy: inc, rho: ^f64) ---
 
-
     // level 1m
     bli_ssetm :: proc(conjalpha: conj, diagoffa: doff, diaga: diag, uploa: uplo, m: dim, n: dim, alpha: ^f32, a: [^]f32, rsa: inc, csa: inc) ---
     bli_dsetm :: proc(conjalpha: conj, diagoffa: doff, diaga: diag, uploa: uplo, m: dim, n: dim, alpha: ^f64, a: [^]f64, rsa: inc, csa: inc) ---
 
-    //level 2
+    // level 2
+    bli_dger :: proc(conjx: conj, conjy: conj, m: dim, n: dim, alpha: ^f64, x: [^]f64, incx: inc, y: [^]f64, incy: inc, a: [^]f64, rsa: inc, csa: inc) ---
+    bli_sger :: proc(conjx: conj, conjy: conj, m: dim, n: dim, alpha: ^f32, x: [^]f32, incx: inc, y: [^]f32, incy: inc, a: [^]f32, rsa: inc, csa: inc) ---
+
     bli_ssymv :: proc(uploa: uplo, conja: conj, conjx: conj, m: dim, alpha: ^f32, a: [^]f32, rsa: inc, csa: inc, x: [^]f32, incx: inc, beta: ^f32, y: [^]f32, incy: inc) ---
     bli_dsymv :: proc(uploa: uplo, conja: conj, conjx: conj, m: dim, alpha: ^f64, a: [^]f64, rsa: inc, csa: inc, x: [^]f64, incx: inc, beta: ^f64, y: [^]f64, incy: inc) ---
+
+    blis_sgemv :: proc(transa: trans, conjx: conj, m: dim, n: dim, alpha: ^f32, a: [^]f32, rsa: inc, csa: inc, x: [^]f32, incx: inc, beta: ^f32, y: [^]f32, incy: inc) ---
+    blis_dgemv :: proc(transa: trans, conjx: conj, m: dim, n: dim, alpha: ^f64, a: [^]f64, rsa: inc, csa: inc, x: [^]f64, incx: inc, beta: ^f64, y: [^]f64, incy: inc) ---
+
+    // level 3v
+    bli_strsv :: proc(uploa: uplo, transa: trans, diaga: diag, m: dim, alpha: ^f32, a: [^]f32, rsa: inc, csa: inc, y: [^]f32, incy: inc) ---
+    bli_dtrsv :: proc(uploa: uplo, transa: trans, diaga: diag, m: dim, alpha: ^f64, a: [^]f64, rsa: inc, csa: inc, y: [^]f64, incy: inc) ---
+
+    // level 3m
+    bli_strsm :: proc(sidea: side, uploa: uplo, transa: trans, diaga: diag, m: dim, n: dim, alpha: ^f32, a: [^]f32, rsa: inc, csa: inc, b: [^]f32, rsb: inc, csb: inc) ---
+    bli_dtrsm :: proc(sidea: side, uploa: uplo, transa: trans, diaga: diag, m: dim, n: dim, alpha: ^f64, a: [^]f64, rsa: inc, csa: inc, b: [^]f64, rsb: inc, csb: inc) ---
 }
 
 // SET
@@ -140,7 +160,7 @@ bli_dot :: proc {
 }
 
 @(require_results)
-dot :: #force_inline proc "c" (x, y: $T/[]$E, n: int = -1, incx: int = 1, incy: int = 1, conjx: conj = conj.BLIS_NO_CONJUGATE, conjy: conj = conj.BLIS_NO_CONJUGATE) -> (rho: E) {
+dot :: proc (x, y: $T/[]$E, n: int = -1, incx: int = 1, incy: int = 1, conjx: conj = conj.BLIS_NO_CONJUGATE, conjy: conj = conj.BLIS_NO_CONJUGATE) -> (rho: E) {
     _n := len(x) if n == -1 else n
     bli_dot(conjx, conjy, dim(_n), raw_data(x), inc(incx), raw_data(y), inc(incy), &rho)
     return
@@ -153,7 +173,7 @@ bli_symv :: proc {
     bli_dsymv,
 }
 
-symv :: #force_inline proc "c" (beta: $E, y: []E, alpha: E, a: Symmetric(E), x: []E, conja: conj = conj.BLIS_NO_CONJUGATE, conjx: conj = conj.BLIS_NO_CONJUGATE) {
+symv :: #force_inline proc "contextless" (beta: $E, y: []E, alpha: E, a: Symmetric(E), x: []E, conja: conj = conj.BLIS_NO_CONJUGATE, conjx: conj = conj.BLIS_NO_CONJUGATE) {
     m := a.m
     _beta := beta
     _alpha := alpha
@@ -162,3 +182,45 @@ symv :: #force_inline proc "c" (beta: $E, y: []E, alpha: E, a: Symmetric(E), x: 
     return
 }
 
+// TRSV
+bli_trsv :: proc {
+    bli_strsv,
+    bli_dtrsv,
+}
+
+trsv :: #force_inline proc "contextless" (a: []$E, y: []E, alpha: E, uploa: uplo = uplo.BLIS_UPPER, transa: trans = trans.BLIS_NO_TRANSPOSE, diaga: diag = diag.BLIS_NONUNIT_DIAG) {
+    m := len(y)
+    _alpha := alpha
+    bli_trsv(uploa, transa, diaga, dim(m), &_alpha, raw_data(a), inc(m), inc(1), raw_data(y), inc(1))
+    return
+}
+
+// GER
+bli_ger :: proc {
+    bli_sger,
+    bli_dger,
+}
+
+ger :: #force_inline proc "contextless" (a, x, y: []$E, alpha: E, conjx: conj = conj.BLIS_NO_CONJUGATE, conjy: conj = conj.BLIS_NO_CONJUGATE) {
+    m := len(x)
+    n := len(y)
+    _alpha := alpha
+    bli_ger(conjx, conjy, dim(m), dim(n), &_alpha, raw_data(x), inc(1), raw_data(y), inc(1), raw_data(a), inc(m), inc(1))
+    return
+}
+
+// GEMV
+
+bli_gemv :: proc {
+    blis_sgemv,
+    blis_dgemv,
+}
+
+gemv :: #force_inline proc "contextless" (beta: $E, a: Matrix(E), alpha: E, x, y: []E, transa: trans = trans.BLIS_NO_TRANSPOSE, conjx: conj = conj.BLIS_NO_CONJUGATE) {
+    m := a.m
+    n := a.n
+    _alpha := alpha
+    _beta := beta
+    bli_gemv(transa, conjx, dim(m), dim(n), &_alpha, raw_data(a.data), inc(m), inc(1), raw_data(x), inc(1), &_beta, raw_data(y), inc(1))
+    return
+}
